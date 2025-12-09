@@ -2,26 +2,27 @@ const express = require('express');
 const fetch = require('node-fetch');
 const cors = require('cors');
 const mime = require('mime');
+const cheerio = require('cheerio');
 const path = require('path');
 
 const app = express();
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 3000;
 const CACHE_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days
 const cache = new Map();
 
-// Middleware (from Interstellar)
+// Middleware (Interstellar-style)
 app.use(cors());
 app.use(express.json());
-app.use(express.static('static')); // Serve UI if you add one
+app.use(express.static('static')); // Optional: Add a /static folder for custom assets if needed
 
-// Interstellar-style cloaking: Fake initial page
+// Interstellar-style cloaking: Fake initial page with about:blank
 app.get('/', (req, res) => {
   res.set('Content-Type', 'text/html');
   res.send(`
     <!DOCTYPE html>
     <html><head><title>Google Search</title></head>
     <body style="margin:0;height:100vh;background:#fff">
-      <iframe id="cloak" src="about:blank" style="width:100%;height:100%;border:none"></iframe>
+      <iframe id="cloak" src="about:blank" style="width:100%;height:100%;border:none" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-pointer-lock allow-top-navigation" allowfullscreen></iframe>
       <script>
         setTimeout(() => {
           document.getElementById('cloak').src = '/proxy';
@@ -32,7 +33,7 @@ app.get('/', (req, res) => {
   `);
 });
 
-// Proxy route: Hardcoded to fetch https://v2.rhythm-plus.com/ (Interstellar /e/* logic adapted)
+// Proxy route: Hardcoded to https://v2.rhythm-plus.com/ (Interstellar /e/* logic)
 app.get('/proxy', async (req, res) => {
   const targetUrl = 'https://v2.rhythm-plus.com/';
   const cacheKey = targetUrl;
@@ -51,12 +52,23 @@ app.get('/proxy', async (req, res) => {
 
     let data = await response.text();
     
-    // Basic rewriting (mimic Interstellar link proxying: prefix relative links)
-    // Note: For full site, you'd use Cheerio; this is simple regex for demo
-    data = data.replace(/(href|src)=["']([^"']+)["']/g, (match, attr, url) => {
-      if (url.startsWith('http')) return match; // Absolute external: leave (or proxy further)
-      return `${attr}="/proxy${url.startsWith('/') ? '' : '/'}${url}"`; // Relative → /proxy/...
+    // Full rewriting with Cheerio (Interstellar link proxying: prefix all relative/absolute links)
+    const $ = cheerio.load(data);
+    $('a[href], link[href], script[src], img[src], [style*="url("]').each((i, el) => {
+      let attr = $(el).attr('href') || $(el).attr('src');
+      if (!attr) return;
+      if (attr.startsWith('http')) {
+        // Absolute: Proxy further if needed (for this single site, rewrite to /proxy/full-path)
+        attr = attr.replace('https://v2.rhythm-plus.com', '/proxy');
+      } else if (attr.startsWith('/')) {
+        attr = '/proxy' + attr;
+      } else {
+        attr = '/proxy/' + attr;
+      }
+      if ($(el).attr('href')) $(el).attr('href', attr);
+      if ($(el).attr('src')) $(el).attr('src', attr);
     });
+    data = $.html();
 
     // Set MIME (from Interstellar)
     const contentType = response.headers.get('content-type') || mime.getType(targetUrl) || 'text/html';
@@ -66,28 +78,55 @@ app.get('/proxy', async (req, res) => {
     res.set('Content-Type', contentType);
     res.send(data);
   } catch (error) {
-    res.status(500).send('<h1>Error loading resource</h1><p>' + error.message + '</p>');
+    res.status(500).send(`
+      <!DOCTYPE html>
+      <html><head><title>Error</title></head>
+      <body style="text-align:center;padding:50px">
+        <h1>Failed to load resource</h1>
+        <p>${error.message}</p>
+      </body></html>
+    `);
   }
 });
 
-// Handle proxied assets (e.g., /proxy/css/style.css → fetch from target)
+// Handle proxied assets (e.g., /proxy/css/style.css → fetch from target; Interstellar /e/* extension)
 app.get('/proxy/*', async (req, res) => {
   const subPath = req.path.replace('/proxy', '');
-  const targetUrl = 'https://v2.rhythm-plus.com' + subPath;
-  // Reuse fetch/cache logic from above (simplified)
-  // ... (implement similar to /proxy for images/JS/CSS)
-  const cached = cache.get(targetUrl);
-  if (cached) {
+  const targetUrl = `https://v2.rhythm-plus.com${subPath}`;
+  const cacheKey = targetUrl;
+
+  // Check cache
+  const cached = cache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
     res.set('Content-Type', cached.contentType);
     return res.send(cached.data);
   }
-  // Fetch and cache (omitted for brevity; copy from /proxy)
-  res.status(404).send('Asset not found');
+
+  try {
+    const response = await fetch(targetUrl);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const data = await response.buffer(); // For binary assets like images/CSS
+    const contentType = response.headers.get('content-type') || mime.getType(targetUrl);
+
+    cache.set(cacheKey, { data: data.toString('base64'), contentType, timestamp: Date.now() }); // Base64 for cache
+    res.set('Content-Type', contentType);
+    res.send(data);
+  } catch (error) {
+    res.status(404).send('Asset not found');
+  }
 });
 
-// Error pages (from Interstellar)
+// 404 fallback (from Interstellar)
 app.use((req, res) => {
-  res.status(404).sendFile(path.join(__dirname, 'static/404.html')); // Add a 404.html if needed
+  res.status(404).send(`
+    <!DOCTYPE html>
+    <html><head><title>404</title></head>
+    <body style="text-align:center;padding:50px">
+      <h1>Not Found</h1>
+    </body></html>
+  `);
 });
 
-app.listen(PORT, () => console.log(`Proxy running on port ${PORT}`));
+// Export for Vercel (no app.listen needed)
+module.exports = app;
