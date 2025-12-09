@@ -6,7 +6,6 @@ const cheerio = require('cheerio');
 const path = require('path');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
 const CACHE_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days
 const cache = new Map();
 
@@ -106,12 +105,13 @@ app.get('/proxy/*', async (req, res) => {
     const response = await fetch(targetUrl);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-    const data = await response.buffer(); // For binary assets like images/CSS
+    const buffer = await response.buffer();
     const contentType = response.headers.get('content-type') || mime.getType(targetUrl);
 
-    cache.set(cacheKey, { data: data.toString('base64'), contentType, timestamp: Date.now() }); // Base64 for cache
+    // Cache as buffer for binary
+    cache.set(cacheKey, { data: buffer, contentType, timestamp: Date.now() });
     res.set('Content-Type', contentType);
-    res.send(data);
+    res.send(buffer);
   } catch (error) {
     res.status(404).send('Asset not found');
   }
@@ -128,5 +128,7 @@ app.use((req, res) => {
   `);
 });
 
-// Export for Vercel (no app.listen needed)
-module.exports = app;
+// Vercel Serverless Export (THIS IS WHAT WAS MISSING)
+export default async function handler(req, res) {
+  return app(req, res);
+}
