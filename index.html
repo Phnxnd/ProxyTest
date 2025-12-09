@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Proxy</title>
+  <title>Proxy Frame</title>
   <style>
     body { margin: 0; }
     iframe { width: 100vw; height: 100vh; border: none; }
@@ -10,9 +10,9 @@
 <body>
   <iframe id="frame"></iframe>
   <script>
-    const target = "https://example.com";
+    const target = "https://v2.rhythm-plus.com/";
     document.getElementById("frame").src =
-      "proxy?url=" + encodeURIComponent(target);
+      "/api/proxy?url=" + encodeURIComponent(target);
   </script>
 </body>
 </html>
